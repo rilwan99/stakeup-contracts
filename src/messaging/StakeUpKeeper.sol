@@ -19,6 +19,7 @@ contract StakeUpKeeper is LzOrderedMessenger {
 
     // =================== Storage ===================
     /// @dev Address of stUsdc contract
+    // @pattern refers to stUsdc Lite instance on the same chain
     address private immutable _stUsdc;
 
     // =================== Modifiers ===================
@@ -109,6 +110,7 @@ contract StakeUpKeeper is LzOrderedMessenger {
         receipts = new MessagingReceipt[](length);
 
         for (uint256 i = 0; i < length; ++i) {
+            // @pattern invoes OAppSender._lzSend()
             MessagingReceipt memory receipt =
                 _lzSend(peerEids[i], message, options, MessagingFee(providedFee, 0), address(this));
             providedFee -= receipt.fee.nativeFee;

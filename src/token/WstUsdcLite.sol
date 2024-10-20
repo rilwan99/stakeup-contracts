@@ -39,6 +39,7 @@ contract WstUsdcLite is IWstUsdcLite, ERC20 {
         require(stUsdcAmount > 0, Errors.ZeroAmount());
 
         _burn(msg.sender, wstUsdcAmount);
+        // @pattern invokes RebasingOFT transferShares()
         StUsdcLite(address(_stUsdc)).transferShares(msg.sender, wstUsdcAmount);
         emit WstUsdcUnwrapped(msg.sender, wstUsdcAmount, stUsdcAmount);
     }

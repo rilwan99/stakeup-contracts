@@ -33,7 +33,7 @@ contract WstUsdc is IWstUsdc, WstUsdcLite, ERC1155TokenReceiver {
 
     // ================== Constructor ==================
     constructor(address stUsdc_) WstUsdcLite(stUsdc_) {
-        _stUsdcAsset = IStUsdc(stUsdc_).asset();
+        _stUsdcAsset = IStUsdc(stUsdc_).asset(); // points to usdc
         _tby = IStUsdc(stUsdc_).tby();
         _sup = IERC20(address(IStUsdc(stUsdc_).stakeUpToken()));
         // Set approval for stUsdc to be able to transfer TBYs on behalf of the WstUsdc contract
@@ -43,6 +43,7 @@ contract WstUsdc is IWstUsdc, WstUsdcLite, ERC1155TokenReceiver {
     // =================== Functions ===================
 
     /// @inheritdoc IWstUsdc
+    // @pattern deposits usdc and get wstUsdc in return, calls depositAsset on stUsdc contract
     function depositAsset(uint256 amount) external override returns (uint256 amountMinted) {
         _stUsdcAsset.safeTransferFrom(msg.sender, address(this), amount);
         _stUsdcAsset.safeApprove(address(_stUsdc), amount);
@@ -67,6 +68,7 @@ contract WstUsdc is IWstUsdc, WstUsdcLite, ERC1155TokenReceiver {
     }
 
     /// @inheritdoc IWstUsdc
+    // @pattern burns wstUsdc, get number of stUsdc of user, redeems it and transfer USDC back to the user
     function redeemWstUsdc(uint256 amount) external override returns (uint256 assetsRedeemed) {
         _burn(msg.sender, amount);
         uint256 stUsdcAmount = _stUsdc.usdByShares(amount);

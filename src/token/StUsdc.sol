@@ -48,6 +48,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
 
     // ================== Immutables ===================
     /// @dev Underlying token
+    // @pattern refers to USDC
     IERC20 private immutable _asset;
 
     /// @dev TBY Contract
@@ -77,7 +78,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
     // ================== Constructor ==================
 
     constructor(
-        address asset_,
+        address asset_, // USDC
         address bloomPool_,
         address stakeupStaking_,
         address wstUsdc_,
@@ -89,78 +90,99 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
         _asset = IERC20(asset_);
         _assetDecimals = IERC20Metadata(asset_).decimals();
 
+        // @pattern ensure asset used in the same as bloom Pool (USDC)
         require(IBloomPool(bloomPool_).asset() == asset_, Errors.InvalidAsset());
         _bloomPool = IBloomPool(bloomPool_);
         _tby = ERC1155(IBloomPool(bloomPool_).tby());
 
         _stakeupStaking = IStakeUpStaking(stakeupStaking_);
-        _stakeupToken = IStakeUpStaking(stakeupStaking_).stakupToken();
+        _stakeupToken = IStakeUpStaking(stakeupStaking_).stakupToken(); // @pattern func sig is correct
         _wstUsdc = IWstUsdc(wstUsdc_);
 
         _scalingFactor = 10 ** (18 - _assetDecimals);
         _startTimestamp = block.timestamp;
 
-        _pokeRewardsRemaining = Constants.POKE_REWARDS;
+        _pokeRewardsRemaining = Constants.POKE_REWARDS; // set to 10M
         _mintRewardsRemaining = StakeUpMintRewardLib._getMintRewardAllocation();
 
         // On the first redemption we will increment this value to overflow and start at 0.
         _lastRedeemedTbyId = type(uint256).max;
-        _highestUsdPerShare = Math.WAD;
+        _highestUsdPerShare = Math.WAD; // set to 1e18 (100%)
     }
 
     // =================== Functions ==================
 
     /// @inheritdoc IStUsdc
+    // @pattern deposit USDC in return for stUsdc
     function depositAsset(uint256 amount) external nonReentrant returns (uint256 amountMinted) {
         require(amount > 0, Errors.ZeroAmount());
-        amountMinted = amount * _scalingFactor;
+        // @pattern converts USDC (6 decimals) to stUsdc (18 decimals)
+        amountMinted = amount * _scalingFactor; 
 
+        // @pattern calculates and mints shares to the user, update internal accounting
         _deposit(amountMinted);
         emit AssetDeposited(msg.sender, amount);
+
+        // @pattern transfers USDC -> stUsdc contract -> Bloom Pool, opens a lend order
         _openLendOrder(amount);
     }
 
     /// @inheritdoc IStUsdc
     function depositTby(uint256 tbyId, uint256 amount) external nonReentrant returns (uint256 amountMinted) {
         IBloomPool pool = _bloomPool;
+        // @pattern validates tby
         require(amount > 0, Errors.ZeroAmount());
         require(!pool.isTbyRedeemable(tbyId), Errors.RedeemableTbyNotAllowed());
 
+        // @pattern calc amount of stUsdc to mint based on
+        // when tby is minted (> or < 24 hours) and current rate of tby
         amountMinted = _calculateTbyMintAmount(pool, tbyId, amount);
 
+        // @pattern passes in amount of stUsdc to be minted
         _deposit(amountMinted);
-        // Calculate & mint SUP mint rewards to users.
+        // @pattern Calculate & mint SUP mint rewards to users.
         _mintRewards(pool, tbyId, amount);
 
         emit TbyDeposited(msg.sender, tbyId, amount, amountMinted);
+
+        // @pattern actual transfer of tby tokens
         _tby.safeTransferFrom(msg.sender, address(this), tbyId, amount, "");
     }
 
     /// @inheritdoc IStUsdc
     function redeemStUsdc(uint256 amount) external nonReentrant returns (uint256 assetAmount) {
         require(amount > 0, Errors.ZeroAmount());
+        // @pattern balanceOf returns the amount of usdc that the input stUsdc amount is worth
         require(balanceOf(msg.sender) >= amount, Errors.InsufficientBalance());
 
+        // @pattern shares refer to amount * totalShares / totalUsd (totalSupply)
         uint256 shares = sharesByUsd(amount);
-        assetAmount = amount / _scalingFactor;
+        assetAmount = amount / _scalingFactor; // amount of usdc corresponding to input amount
 
+        // @pattern amount of USDC in the contract 
         uint256 assetBalance = _asset.balanceOf(address(this));
         if (assetBalance < assetAmount) {
             uint256 amountNeeded = assetAmount - assetBalance;
+            // @pattern cancel open and matched orders to free up liquidity
             _tryOrderCancellation(amountNeeded);
             uint256 newAssetBalance = _asset.balanceOf(address(this));
             require(newAssetBalance >= assetAmount, Errors.InsufficientBalance());
         }
 
+        // @pattern updates total supply of shares and user's amount of shares
         _burnShares(msg.sender, shares);
+
         _setTotalUsdFloor(_totalUsdFloor - amount);
         _globalShares -= shares;
 
         emit Redeemed(msg.sender, shares, assetAmount);
+
+        // @pattern transfers usdc to user
         _asset.safeTransfer(msg.sender, assetAmount);
     }
 
     /// @inheritdoc IStUsdc
+    // @pattern why is the function payable?
     function poke(LzSettings calldata settings) external payable nonReentrant {
         uint256 currentTimestamp = block.timestamp;
         uint256 lastUpdate = _lastRateUpdate;
@@ -168,22 +190,25 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
 
         IBloomPool pool = _bloomPool;
 
-        // Open a lend order in the Bloom Pool to auto-compound USDC
+        // Open a lend order in the Bloom Pool to auto-compound all USDC held by this contract
         _autoLendAsset(pool);
 
         // Calculate the value of USDC and TBYs backed by the contract
         uint256 globalShares_ = _globalShares;
-        uint256 protocolValue = _protocolValue(pool);
+        uint256 protocolValue = _protocolValue(pool); // value of all USDC and TBYs in Bloom Pool
         uint256 newUsdPerShare = protocolValue.divWad(globalShares_);
         uint256 lastUsdPerShare = _lastUsdPerShare;
         uint256 prevFee = _pendingFee;
 
+        // @pattern if shares appreciate, AND reach ATH, update pending fee and highestUsdPerShare
+        // @audit if newUsdPerShare > lastUsdPerShare < highestUsdPerShare, then no performance fee is calculared
         if (newUsdPerShare > lastUsdPerShare) {
             uint256 newPendingFee;
             uint256 highestUsdPerShare = _highestUsdPerShare;
             if (newUsdPerShare > highestUsdPerShare) {
                 // Calculate performance fee
                 uint256 yieldPerShare = newUsdPerShare - highestUsdPerShare;
+                // @pattern set to 10% of total yield generated
                 newPendingFee = _calculateFee(yieldPerShare, globalShares_);
                 _highestUsdPerShare = newUsdPerShare;
             }
@@ -194,9 +219,11 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
         }
 
         // Update USD per share to reflect the new value
+        // @pattern updates _totalUsdFloor, _lastRateUpdate, _rewardPerSecond 
         _setUsdPerShare(newUsdPerShare, currentTimestamp);
 
         uint256 peerLength = _peerEids.length;
+        // @pattern syncs as stUsdc instance with the newUsdPerShare value
         if (peerLength != 0) {
             uint256 lzFee = settings.fee.nativeFee;
             require(msg.value >= lzFee, Errors.InvalidMsgValue());
@@ -211,7 +238,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
         }
 
         // Harvest matured TBYs and distribute rewards
-        _harvest();
+        _harvest(); // redeems matured TBYs from bloom
         _distributePokeRewards();
     }
 
@@ -241,10 +268,13 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      * @notice Accounting logic for handling underlying asset and tby deposits.
      * @param amount The amount stUsdc being minted.
      */
+    // @pattern passes in amount of stUSDC to be minted
     function _deposit(uint256 amount) internal {
+        // @pattern calls stUsdcLite: calc shares amount via: shares = amount * totalShares / totalUsd_
         uint256 sharesAmount = sharesByUsd(amount);
         if (sharesAmount == 0) revert Errors.ZeroAmount();
 
+        // @pattern calls RebasingOFT: updates internal accounting (_totalShares, _shares[recipient])
         _mintShares(msg.sender, sharesAmount);
         _globalShares += sharesAmount;
         _setTotalUsdFloor(_totalUsdFloor + amount);
@@ -259,7 +289,8 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      * @return The amount of stUsdc to mint
      */
     function _calculateTbyMintAmount(IBloomPool pool, uint256 tbyId, uint256 amount) internal view returns (uint256) {
-        uint256 tbyStart = pool.tbyMaturity(tbyId).start;
+        // @pattern start timestamp pointing to when tby id first minted
+        uint256 tbyStart = pool.tbyMaturity(tbyId).start; 
         uint256 rate = pool.getRate(tbyId);
 
         // If the TBY has been minted for more than 24 hours and is greater than 1e18, then we discount the rate by a factor of 24 hours.
@@ -288,6 +319,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
     function _mintRewards(IBloomPool pool, uint256 tbyId, uint256 amount) internal {
         uint256 mintRewardsRemaining = _mintRewardsRemaining;
         if (mintRewardsRemaining > 0) {
+            // @pattern returns max rewards eligible for user, based on tby maturity
             uint256 maxRewards = _calculateRewards(pool, tbyId, amount);
             uint256 eligibleAmount = Math.min(maxRewards, mintRewardsRemaining);
             _mintRewardsRemaining -= eligibleAmount;
@@ -299,6 +331,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      * @notice Distributes fees to StakeUp Staking
      * @param fee The fee amount in USD scaled to 1e18.
      */
+    // @pattern mints shares to stakeupStaking contract
     function _processFee(uint256 fee) internal {
         if (fee > 0) {
             uint256 sharesFeeAmount = sharesByUsd(fee);
@@ -317,6 +350,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      */
     function _tryOrderCancellation(uint256 amount) internal {
         IBloomPool pool = _bloomPool;
+        // @pattern returns the amount of open lend orders belonging to this contract
         uint256 amountOpen = pool.amountOpen(address(this));
 
         // Cancel open lend orders if there are any
@@ -356,9 +390,9 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      * @return value The protocol value of assets and TBYs in USD scaled to 1e18.
      */
     function _protocolValue(IBloomPool pool) internal view returns (uint256 value) {
-        value += pool.amountOpen(address(this));
-        value += pool.amountMatched(address(this));
-        value += _liveTbyValue(pool);
+        value += pool.amountOpen(address(this)); // open lend orders
+        value += pool.amountMatched(address(this)); // matched lend orders
+        value += _liveTbyValue(pool); // live TBYs
         value *= _scalingFactor;
     }
 
@@ -376,11 +410,14 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
         uint256 lastMintedId = pool.lastMintedId();
         if (lastMintedId == type(uint256).max) return 0;
         for (uint256 i = startingId; i <= lastMintedId; ++i) {
+            // @pattern i refers to tby id
+            // return rate * amount of tby tokens for the specific ID held by this contract
             value += pool.getRate(i).mulWad(_tby.balanceOf(address(this), i));
         }
     }
 
     /// @notice Harvests the next TbyId that is ready for redemption.
+    // @pattern checks whether TBY is redeemable, and if so, redeems it (from Bloom)
     function _harvest() internal {
         IBloomPool pool = _bloomPool;
         uint256 tbyId = lastRedeemedTbyId();
@@ -404,6 +441,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
     /// @notice Calulates and mints SUP rewards to users who have poked the contract
     function _distributePokeRewards() internal {
         if (_pokeRewardsRemaining > 0) {
+            // @pattern calculates amount of SUP rewards to be minted to the user
             uint256 amount = StakeUpRewardMathLib._calculateDripAmount(
                 Constants.POKE_REWARDS, _startTimestamp, _pokeRewardsRemaining, false
             );
@@ -425,6 +463,7 @@ contract StUsdc is IStUsdc, StUsdcLite, ReentrancyGuard, ERC1155TokenReceiver {
      * @param amount The amount of TBYs deposited
      * @return The maximum rewards eligible for a user depositing TBYs
      */
+    // @pattern returns amount - (amount * maturity), where maturity = 1 when tby if fully matured
     function _calculateRewards(IBloomPool pool, uint256 tbyId, uint256 amount) internal view returns (uint256) {
         IBloomPool.TbyMaturity memory maturity = pool.tbyMaturity(tbyId);
 

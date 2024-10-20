@@ -75,7 +75,9 @@ abstract contract RebasingOFT is IRebasingOFT, OFTController {
     function _mintShares(address recipient, uint256 sharesAmount) internal virtual returns (uint256 newTotalShares) {
         require(recipient != address(0), Errors.ZeroAddress());
 
+        // create variable to track total shares
         newTotalShares = _totalShares + sharesAmount;
+        // @pattern update state variables tracking total shares
         _totalShares = newTotalShares;
 
         _shares[recipient] = _shares[recipient] + sharesAmount;
@@ -97,35 +99,43 @@ abstract contract RebasingOFT is IRebasingOFT, OFTController {
         uint256 accountShares = _shares[account];
         require(sharesAmount <= accountShares, Errors.InsufficientBalance());
 
+        // @pattern how many usdc tokens these shares are worth before rebase
         uint256 preRebaseTokenAmount = _amountByShares(sharesAmount);
 
+        // @pattern reduce total supply of shares by sharesAmount
         newTotalShares = _totalShares - sharesAmount;
         _totalShares = newTotalShares;
 
         _shares[account] = accountShares - sharesAmount;
 
+        // @pattern how many usdc tokens these shares are worth after rebase
         uint256 postRebaseTokenAmount = _amountByShares(sharesAmount);
 
         _emitTransferEvents(account, address(0), postRebaseTokenAmount, sharesAmount);
     }
 
     /// @notice Get the amount of tokens that is equivalent to a specified amount of shares
+    // @pattern passes in user shares (_shares[account])
     function _amountByShares(uint256 sharesAmount) internal view returns (uint256) {
         uint256 totalShares_ = _totalShares;
         if (totalShares_ == 0) {
             return sharesAmount;
         }
+        // @pattern _totalSupply() refers to USDC owned by the protocol
         return sharesAmount.mulWad(_totalSupply()).divWad(totalShares_);
     }
 
     /// @notice Get the amount of shares that is equivalent to a specified amount of tokens
+    // @audit stUSDC tokens is passed in
+    // @pattern returns amount * total Shares / total USD
     function _sharesByAmount(uint256 amount) internal view returns (uint256) {
-        uint256 totalShares_ = _totalShares;
-        uint256 totalUsd_ = _totalSupply();
+        uint256 totalShares_ = _totalShares; // refers to total Shares of the protocol
+        uint256 totalUsd_ = _totalSupply(); // refers to total USD of the protocol
 
         if (totalShares_ == 0) {
             return amount;
         }
+        // @pattern this is the first USD deposit? Previous deposit were only TBY?
         if (totalUsd_ == 0) {
             return totalShares_;
         }

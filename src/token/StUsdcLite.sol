@@ -42,7 +42,7 @@ contract StUsdcLite is IStUsdcLite, RebasingOFT {
         RebasingOFT("staked USDC", "stUSDC", layerZeroEndpoint, bridgeOperator)
     {
         _lastRateUpdate = block.timestamp;
-        _lastUsdPerShare = FpMath.WAD;
+        _lastUsdPerShare = FpMath.WAD; // set to 1e18
 
         // Deploy the StakeUpKeeper contract
         _keeper = new StakeUpKeeper(address(this), layerZeroEndpoint, bridgeOperator);
@@ -50,11 +50,13 @@ contract StUsdcLite is IStUsdcLite, RebasingOFT {
 
     // =================== Functions ==================
     /// @inheritdoc IStUsdcLite
+    // @pattern keeper call this upon 
     function setUsdPerShare(uint256 usdPerShare, uint256 timestamp) external onlyKeeper {
         _setUsdPerShare(usdPerShare, timestamp);
     }
 
     /// @notice Get the number of shares that are equivalent to a specified amount of USD
+    // @audit amount of stUSDC is passed in
     function sharesByUsd(uint256 usdAmount) public view override returns (uint256) {
         return _sharesByAmount(usdAmount);
     }
@@ -89,8 +91,10 @@ contract StUsdcLite is IStUsdcLite, RebasingOFT {
     }
 
     /// @dev This is called on the base chain before distributing yield to other chains
+    // @pattern if shares appreciate, updates _rewardPerSecond, else sets it to 0
     function _setUsdPerShare(uint256 usdPerShare, uint256 timestamp) internal {
         // solidify the yield from the last 24 hours (stored as floor which will be used to update totalUsdFloor)
+        // @pattern returns _totalUsdFloor + yield from last 24 hours
         uint256 floor = _totalUsd();
         _lastRateUpdate = timestamp;
 

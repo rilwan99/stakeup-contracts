@@ -23,6 +23,13 @@ interface ILayerZeroSettings {
         address refundRecipient;
     }
 
+    /**
+    struct MessagingFee {
+        uint256 nativeFee;
+        uint256 lzTokenFee;
+    }
+     */
+
     // ============================ Receipts ============================
 
     /**
@@ -34,4 +41,18 @@ interface ILayerZeroSettings {
         MessagingReceipt msgReceipt;
         OFTReceipt oftReceipt;
     }
+
+    /**
+    struct MessagingReceipt {
+        bytes32 guid;
+        uint64 nonce;
+        MessagingFee fee;
+    }
+
+    struct OFTReceipt {
+        uint256 amountSentLD; // Amount of tokens ACTUALLY debited from the sender in local decimals.
+        // @dev In non-default implementations, the amountReceivedLD COULD differ from this value.
+        uint256 amountReceivedLD; // Amount of tokens to be received on the remote side.
+    }
+     */
 }

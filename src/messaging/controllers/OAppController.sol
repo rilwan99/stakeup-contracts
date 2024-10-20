@@ -25,6 +25,7 @@ abstract contract OAppController is ControllerBase, OApp {
     function setPeer(uint32 eid, bytes32 peer) public virtual override(ControllerBase, OAppCore) onlyBridgeOperator {
         require(eid != 0, Errors.InvalidPeerID());
         require(peer != bytes32(0), Errors.ZeroAddress());
+        // @pattern peers is a mapping in OAppCore.sol
         peers[eid] = peer;
         emit PeerSet(eid, peer);
     }
@@ -32,6 +33,7 @@ abstract contract OAppController is ControllerBase, OApp {
     /// @inheritdoc ControllerBase
     function forceSetDelegate(address newDelegate) external override onlyBridgeOperator {
         require(newDelegate != address(0), Errors.ZeroAddress());
+        // @pattern setDelegate is a function in OAppCore.sol
         endpoint.setDelegate(newDelegate);
     }
 }
